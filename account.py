@@ -2,9 +2,7 @@
 # The COPYRIGHT file at the top level of this repository contains
 # the full copyright notices and license terms.
 from decimal import Decimal
-from sql import Literal
-from sql.operators import Exists
-from trytond.model import Workflow, ModelView, fields
+from trytond.model import ModelView, fields
 from trytond.pool import Pool, PoolMeta
 from trytond.pyson import Eval, Bool
 from trytond.transaction import Transaction
@@ -151,8 +149,6 @@ class Invoice:
         return super(Invoice, cls).create(vlist)
 
     @classmethod
-    @ModelView.button
-    @Workflow.transition('posted')
     def post(cls, invoices):
         '''
         Check up invoices that requires bank account because its payment type,
@@ -194,7 +190,8 @@ class Reconciliation:
             moves |= set(l.move for l in reconciliation.lines)
         invoices = []
         for move in moves:
-            if move.origin and isinstance(move.origin, Invoice):
+            if (move.origin and isinstance(move.origin, Invoice)
+                    and move.origin.state == 'posted'):
                 invoices.append(move.origin)
         if invoices:
             Invoice.process(invoices)
