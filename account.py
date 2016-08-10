@@ -438,8 +438,10 @@ class Line:
 class CompensationMoveStart(ModelView):
     'Create Compensation Move Start'
     __name__ = 'account.move.compensation_move.start'
-    maturity_date = fields.Date('Maturity Date')
     party = fields.Many2One('party.party', 'Party', readonly=True)
+    account = fields.Many2One('account.account', 'Account', required=True)
+    date = fields.Date('Date')
+    maturity_date = fields.Date('Maturity Date')
 
     @classmethod
     def __setup__(cls):
@@ -451,6 +453,11 @@ class CompensationMoveStart(ModelView):
                     'compensation move. Party "%s" in line "%s" is different '
                     'from previous party "%s"'),
                 })
+
+    @staticmethod
+    def default_date():
+        pool = Pool()
+        return pool.get('ir.date').today()
 
     @staticmethod
     def default_maturity_date():
@@ -481,6 +488,10 @@ class CompensationMoveStart(ModelView):
         if company and company.currency.is_zero(amount):
             cls.raise_user_error('normal_reconcile')
         return defaults
+            res['account'] = (party.account_receivable.id
+                if party.account_receivable else None)
+            res['account'] = (party.account_payable.id
+                if party.account_payable else None)
 
 
 class CompensationMove(Wizard):
@@ -511,13 +522,17 @@ class CompensationMove(Wizard):
             return 'end'
 
         move = self.get_move(lines)
-        extra_lines, origin = self.get_extra_lines(lines)
+        extra_lines, origin = self.get_extra_lines(lines, self.start.account,
+            self.start.party)
 
         if origin:
             move.origin = origin
         move.lines = move_lines + extra_lines
         move.save()
         Move.post([move])
+        to_reconcile = {}
+        for line in lines:
+            to_reconcile.setdefault(line.account.id, []).append(line)
         for line in move.lines:
             append = True
             for extra_line in extra_lines:
@@ -525,9 +540,9 @@ class CompensationMove(Wizard):
                     append = False
                     break
             if append:
-                lines.append(line)
-
-        Line.reconcile(lines)
+                to_reconcile.setdefault(line.account.id, []).append(line)
+        for lines_to_reconcile in to_reconcile.values():
+            Line.reconcile(lines_to_reconcile)
         return 'end'
 
     def is_extra_line(self, line, extra_line):
@@ -567,15 +582,13 @@ class CompensationMove(Wizard):
 
         return move
 
-    def get_extra_lines(self, lines):
+    def get_extra_lines(self, lines, account, party):
         'Returns extra lines to balance move and move origin'
         pool = Pool()
         Line = pool.get('account.move.line')
 
         amount = Decimal('0.0')
         origins = {}
-        account = None
-        party = None
         for line in lines:
             line_amount = line.debit - line.credit
             amount += line_amount
@@ -583,10 +596,6 @@ class CompensationMove(Wizard):
                 if line.origin not in origins:
                     origins[line.origin] = Decimal('0.0')
                 origins[line.origin] += abs(line_amount)
-            if not account:
-                account = line.account
-            if not party:
-                party = line.party
 
         if not account or not party:
             ([], None)
